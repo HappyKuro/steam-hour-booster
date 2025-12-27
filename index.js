@@ -2,6 +2,7 @@ const SteamUser = require('steam-user');
 const readline = require('readline');
 const fs = require('fs');
 const https = require('https');
+const crypto = require('crypto');
 
 // --- LOAD CONFIGURATION ---
 let config;
@@ -120,7 +121,7 @@ async function startBoosters() {
     for (const account of accounts) {
         loginAccount(account);
         // Delay to avoid Steam Rate Limits
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 7000));
     }
 }
 
@@ -130,11 +131,14 @@ function loginAccount(account) {
     const client = new SteamUser();
     clients.push(client); 
     
-    // Some versions of Steam-User require a machine name to trigger certain events
+    // Generate a unique machine ID based on the username to help Steam recognize the "device"
+    const machineID = crypto.createHash('sha1').update(account.username).digest('hex');
+
     const logOnOptions = {
         accountName: account.username,
         password: account.password,
-        machineName: "SteamHourBooster"
+        machineName: "SteamHourBooster",
+        clientUniqueId: machineID
     };
 
     client.logOn(logOnOptions);
@@ -166,17 +170,26 @@ function loginAccount(account) {
         const guardMsg = `🔑 [${account.username}] STEAM GUARD REQUIRED! (Domain: ${domain || 'Mobile App'})`;
         log(guardMsg, true);
         
-        // Pause automated logs for a moment so the prompt is visible
         rl.question(`👉 Enter code for ${account.username}: `, (code) => {
+            log(`[${account.username}] Sending Guard code...`);
             callback(code.trim());
         });
     });
 
+    // Confirmation when the code works
+    client.on('webLogOn', () => {
+        log(`[${account.username}] Steam Guard code accepted.`);
+    });
+
     client.on('error', (err) => {
         log(`❌ [${account.username}] Error: ${err.message}`, true);
+        
         if (err.message.includes("RateLimitExceeded")) {
             log(`[${account.username}] Rate limit hit. Retrying in 30m...`);
             setTimeout(() => client.logOn(logOnOptions), 30 * 60 * 1000);
+        } else if (err.message.includes("InvalidPassword") || err.message.includes("LogonSessionReplaced")) {
+            // Keep the client alive to try again or stay disconnected
+            if (stats[account.username]) stats[account.username].startTime = null;
         }
     });
 

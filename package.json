@@ -1,0 +1,12 @@
+{
+    "name": "steam-hour-booster",
+    "version": "1.0.0",
+    "description": "A Node.js script to boost Steam hours across multiple accounts.",
+    "main": "index.js",
+    "dependencies": {
+      "steam-user": "^4.28.0"
+    },
+    "scripts": {
+      "start": "node index.js"
+    }
+  }

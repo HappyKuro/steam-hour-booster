@@ -1,6 +1,7 @@
 const SteamUser = require('steam-user');
 const readline = require('readline');
 const fs = require('fs');
+const https = require('https');
 
 // --- CONFIGURATION ---
 
@@ -18,8 +19,90 @@ const RICH_PRESENCE_TEXT = "Idling for hours...";
 // 4. How often to show the hour report in the console (in minutes)
 const REPORT_INTERVAL_MINUTES = 60;
 
+// 5. Discord Webhook URL (Leave empty "" to disable)
+const DISCORD_WEBHOOK_URL = "";
+
+// 6. Telegram Bot Configuration (Leave empty "" to disable)
+const TELEGRAM_BOT_TOKEN = ""; // Get from @BotFather
+const TELEGRAM_CHAT_ID = "";   // Your personal Chat ID
+
 const accounts = [];
 const stats = {}; // Track start times for hour counting
+
+// --- HELPER FUNCTIONS ---
+
+/**
+ * Sends a message to a Discord Webhook
+ * @param {string} content - The message text
+ */
+function sendDiscordNotification(content) {
+    if (!DISCORD_WEBHOOK_URL) return;
+
+    const data = JSON.stringify({
+        content: content,
+        username: "Steam Booster Bot"
+    });
+
+    const url = new URL(DISCORD_WEBHOOK_URL);
+    const options = {
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': data.length,
+        },
+    };
+
+    const req = https.request(options);
+    req.on('error', (error) => {
+        console.error(`[Discord] Webhook Error: ${error.message}`);
+    });
+    req.write(data);
+    req.end();
+}
+
+/**
+ * Sends a message to a Telegram Bot
+ * @param {string} content - The message text
+ */
+function sendTelegramNotification(content) {
+    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+
+    // Remove markdown symbols that might break Telegram's default parsing if not handled
+    const cleanContent = content.replace(/\*\*/g, '').replace(/•/g, '-');
+    
+    const data = JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: cleanContent
+    });
+
+    const options = {
+        hostname: 'api.telegram.org',
+        path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': data.length,
+        },
+    };
+
+    const req = https.request(options);
+    req.on('error', (error) => {
+        console.error(`[Telegram] Bot Error: ${error.message}`);
+    });
+    req.write(data);
+    req.end();
+}
+
+/**
+ * Helper to send to all configured platforms
+ * @param {string} content 
+ */
+function broadcastNotification(content) {
+    sendDiscordNotification(content);
+    sendTelegramNotification(content);
+}
 
 // Read accounts.txt
 try {
@@ -68,22 +151,31 @@ const rl = readline.createInterface({
 
 const clients = []; 
 
-// Function to print the current progress
+// Function to print and send the current progress
 function printProgress() {
-    console.log(`\n--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---`);
+    let reportText = `\n--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---\n`;
+    let notifyText = `**Hour Boost Report (${new Date().toLocaleTimeString()})**\n`;
     let activeCount = 0;
     
     for (const username in stats) {
         if (stats[username].startTime) {
             const elapsedMs = Date.now() - stats[username].startTime;
             const hours = (elapsedMs / (1000 * 60 * 60)).toFixed(2);
-            console.log(`[${username}] Boosted this session: ${hours} hours`);
+            const line = `[${username}] Boosted this session: ${hours} hours`;
+            reportText += line + "\n";
+            notifyText += "• " + line + "\n";
             activeCount++;
         }
     }
     
-    if (activeCount === 0) console.log("No accounts currently active.");
-    console.log("-------------------------------------------\n");
+    if (activeCount === 0) {
+        reportText += "No accounts currently active.\n";
+        notifyText += "No accounts currently active.\n";
+    }
+    
+    reportText += "-------------------------------------------\n";
+    console.log(reportText);
+    broadcastNotification(notifyText);
 }
 
 // Set up periodic reporting
@@ -91,7 +183,7 @@ setInterval(printProgress, REPORT_INTERVAL_MINUTES * 60 * 1000);
 
 async function startBoosters() {
     console.log(`[System] Starting Steam Hour Booster for ${accounts.length} accounts...`);
-    console.log(`[System] Boosting AppIDs: ${GAMES_LIST.join(', ')}`);
+    broadcastNotification(`🚀 **System Started**: Boosting ${accounts.length} accounts.`);
 
     for (const account of accounts) {
         await loginAccount(account);
@@ -101,7 +193,6 @@ async function startBoosters() {
     console.log(`[System] A progress report will be shown every ${REPORT_INTERVAL_MINUTES} minutes.`);
     console.log("[System] Press Ctrl+C to stop.");
     
-    // Initial report after everyone is logged in
     printProgress();
 }
 
@@ -119,6 +210,7 @@ function loginAccount(account) {
 
         const timeout = setTimeout(() => {
              console.log(`[${account.username}] Login timed out. Moving to next account.`);
+             broadcastNotification(`⚠️ **Timeout**: ${account.username} failed to log in within 2 minutes.`);
              resolve(); 
         }, 120000); 
 
@@ -127,13 +219,14 @@ function loginAccount(account) {
         client.on('loggedOn', () => {
             clearTimeout(timeout);
             console.log(`[${account.username}] Successfully logged on.`);
+            broadcastNotification(`✅ **Logged In**: ${account.username} is now idling.`);
             
             // Record start time for statistics
             stats[account.username] = { startTime: Date.now() };
-            
+
             // Set User Status
             client.setPersona(account.personaState);
-            
+
             // Start Idling Games
             client.gamesPlayed(account.games);
 
@@ -141,13 +234,12 @@ function loginAccount(account) {
             // 'steam_display' is the standard key for custom status text
             client.richPresence(account.games[0], { "steam_display": RICH_PRESENCE_TEXT });
 
-            console.log(`[${account.username}] Idling started with Rich Presence: "${RICH_PRESENCE_TEXT}"`);
             resolve();
         });
 
         client.on('steamGuard', (domain, callback) => {
             console.log(`[${account.username}] Steam Guard Code required! Email domain: ${domain}`);
-            console.log(`[${account.username}] Please check your email and enter the code below:`);
+            broadcastNotification(`🔑 **Steam Guard**: ${account.username} needs a code (Email: ${domain}).`);
             
             rl.question(`Code for ${account.username}: `, (code) => {
                 callback(code.trim());
@@ -157,17 +249,18 @@ function loginAccount(account) {
         client.on('error', (err) => {
             clearTimeout(timeout);
             console.error(`[${account.username}] Error: ${err.message}`);
+            broadcastNotification(`❌ **Error** [${account.username}]: ${err.message}`);
+            
             if (err.message.includes("RateLimitExceeded")) {
-                console.log(`[${account.username}] Rate limit hit. Will retry in background in 30 mins.`);
                 setTimeout(() => client.logOn(logOnOptions), 30 * 60 * 1000);
             }
             resolve();
         });
 
         client.on('disconnected', (eresult, msg) => {
-            // When disconnected, we stop counting until reconnected
             if (stats[account.username]) stats[account.username].startTime = null;
             console.log(`[${account.username}] Disconnected: ${msg}. Reconnecting...`);
+            broadcastNotification(`📴 **Disconnected**: ${account.username} (${msg}).`);
         });
     });
 }

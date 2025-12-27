@@ -4,9 +4,9 @@
     "description": "A Node.js script to boost Steam hours across multiple accounts.",
     "main": "index.js",
     "dependencies": {
-      "steam-user": "^4.28.0"
+        "steam-user": "^5.3.0"
     },
     "scripts": {
-      "start": "node index.js"
+        "start": "node index.js"
     }
-  }
+}

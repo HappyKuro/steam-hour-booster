@@ -1,0 +1,10 @@
+{
+  "games_list": [730, 440, 570],
+  "account_status": 1,
+  "rich_presence_enabled": true,
+  "rich_presence_message": "Idling for hours...",
+  "report_interval_minutes": 60,
+  "discord_webhook_url": "",
+  "telegram_bot_token": "",
+  "telegram_chat_id": ""
+}

@@ -3,39 +3,27 @@ const readline = require('readline');
 const fs = require('fs');
 const https = require('https');
 
-// --- CONFIGURATION ---
-
-// 1. The list of Game AppIDs to boost for ALL accounts.
-const GAMES_LIST = [730, 440, 570]; 
-
-// 2. Choose Status: Online, Busy, Away, Invisible, or Offline
-// Options: SteamUser.EPersonaState.Online, .Busy, .Away, .Snooze, .Invisible, .Offline
-const ACCOUNT_STATUS = SteamUser.EPersonaState.Online;
-
-// 3. Rich Presence: Custom text that appears next to your name in the friend list
-// Note: This only works for certain games that support 'steam_display' strings.
-const RICH_PRESENCE_TEXT = "Idling for hours...";
-
-// 4. How often to show the hour report in the console (in minutes)
-const REPORT_INTERVAL_MINUTES = 60;
-
-// 5. Discord Webhook URL (Leave empty "" to disable)
-const DISCORD_WEBHOOK_URL = "";
-
-// 6. Telegram Bot Configuration (Leave empty "" to disable)
-const TELEGRAM_BOT_TOKEN = ""; // Get from @BotFather
-const TELEGRAM_CHAT_ID = "";   // Your personal Chat ID
+// --- LOAD CONFIGURATION ---
+let config;
+try {
+    if (fs.existsSync('config.json')) {
+        config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+    } else {
+        console.error("[System] Error: config.json not found!");
+        process.exit(1);
+    }
+} catch (err) {
+    console.error(`[System] Error parsing config.json: ${err.message}`);
+    process.exit(1);
+}
 
 const accounts = [];
-const stats = {}; // Track start times for hour counting
+const stats = {}; 
 
 // --- HELPER FUNCTIONS ---
 
-/**
- * Sends a message to a Discord Webhook
- */
 function sendDiscordNotification(content) {
-    if (!DISCORD_WEBHOOK_URL) return;
+    if (!config.discord_webhook_url) return;
 
     const data = JSON.stringify({
         content: content,
@@ -43,7 +31,7 @@ function sendDiscordNotification(content) {
     });
 
     try {
-        const url = new URL(DISCORD_WEBHOOK_URL);
+        const url = new URL(config.discord_webhook_url);
         const options = {
             hostname: url.hostname,
             path: url.pathname,
@@ -55,9 +43,7 @@ function sendDiscordNotification(content) {
         };
 
         const req = https.request(options);
-        req.on('error', (error) => {
-            console.error(`[Discord] Webhook Error: ${error.message}`);
-        });
+        req.on('error', (error) => console.error(`[Discord] Webhook Error: ${error.message}`));
         req.write(data);
         req.end();
     } catch (e) {
@@ -65,22 +51,18 @@ function sendDiscordNotification(content) {
     }
 }
 
-/**
- * Sends a message to a Telegram Bot
- */
 function sendTelegramNotification(content) {
-    if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+    if (!config.telegram_bot_token || !config.telegram_chat_id) return;
 
     const cleanContent = content.replace(/\*\*/g, '').replace(/•/g, '-');
-    
     const data = JSON.stringify({
-        chat_id: TELEGRAM_CHAT_ID,
+        chat_id: config.telegram_chat_id,
         text: cleanContent
     });
 
     const options = {
         hostname: 'api.telegram.org',
-        path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        path: `/bot${config.telegram_bot_token}/sendMessage`,
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -89,16 +71,11 @@ function sendTelegramNotification(content) {
     };
 
     const req = https.request(options);
-    req.on('error', (error) => {
-        console.error(`[Telegram] Bot Error: ${error.message}`);
-    });
+    req.on('error', (error) => console.error(`[Telegram] Bot Error: ${error.message}`));
     req.write(data);
     req.end();
 }
 
-/**
- * Helper to send to all configured platforms
- */
 function broadcastNotification(content) {
     sendDiscordNotification(content);
     sendTelegramNotification(content);
@@ -112,24 +89,22 @@ try {
 
         lines.forEach((line) => {
             if (!line.trim() || line.trim().startsWith('#')) return;
-
             const parts = line.split(':');
             if (parts.length >= 2) {
                 const username = parts[0].trim();
                 const password = parts.slice(1).join(':').trim();
-
                 if (username && password) {
                     accounts.push({
                         username: username,
                         password: password,
-                        games: GAMES_LIST, 
-                        personaState: ACCOUNT_STATUS
+                        games: config.games_list, 
+                        personaState: config.account_status
                     });
                 }
             }
         });
     } else {
-        console.error("[System] Error: accounts.txt not found! Please create it.");
+        console.error("[System] Error: accounts.txt not found!");
         process.exit(1);
     }
 } catch (err) {
@@ -178,7 +153,7 @@ function printProgress() {
     broadcastNotification(notifyText);
 }
 
-setInterval(printProgress, REPORT_INTERVAL_MINUTES * 60 * 1000);
+setInterval(printProgress, config.report_interval_minutes * 60 * 1000);
 
 async function startBoosters() {
     const count = accounts.length;
@@ -192,9 +167,7 @@ async function startBoosters() {
     }
 
     console.log("\n[System] All accounts processed. The script is running in the background.");
-    console.log(`[System] A progress report will be shown every ${REPORT_INTERVAL_MINUTES} minutes.`);
     console.log("[System] Press Ctrl+C to stop.");
-    
     printProgress();
 }
 
@@ -218,7 +191,6 @@ function loginAccount(account) {
 
         client.logOn(logOnOptions);
 
-        // Fetch Steam Profile Name
         client.on('accountInfo', (name) => {
             if (stats[account.username]) {
                 stats[account.username].profileName = name;
@@ -231,19 +203,19 @@ function loginAccount(account) {
             
             stats[account.username] = { 
                 startTime: Date.now(),
-                profileName: null // Will be filled by accountInfo event
+                profileName: null 
             };
 
             client.setPersona(account.personaState);
             client.gamesPlayed(account.games);
             
-            if (account.games && account.games.length > 0) {
+            // Toggle Rich Presence based on config
+            if (config.rich_presence_enabled && account.games && account.games.length > 0) {
                 if (typeof client.setPresence === 'function') {
-                    client.setPresence(account.games[0], { "steam_display": RICH_PRESENCE_TEXT });
+                    client.setPresence(account.games[0], { "steam_display": config.rich_presence_message });
                 }
             }
 
-            // Wait a tiny bit for accountInfo to likely fire before resolving
             setTimeout(() => {
                 const displayName = stats[account.username].profileName || account.username;
                 broadcastNotification(`✅ **Logged In**: ${displayName} is now idling.`);

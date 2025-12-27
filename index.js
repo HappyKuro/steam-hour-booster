@@ -4,9 +4,16 @@ const fs = require('fs');
 
 // --- CONFIGURATION ---
 
-// EDIT THIS: The list of Game AppIDs to boost for ALL accounts.
-// 730 = CS2, 440 = TF2, 570 = Dota 2
+// 1. The list of Game AppIDs to boost for ALL accounts.
 const GAMES_LIST = [730, 440, 570]; 
+
+// 2. Choose Status: Online, Busy, Away, Invisible, or Offline
+// Options: SteamUser.EPersonaState.Online, .Busy, .Away, .Snooze, .Invisible, .Offline
+const ACCOUNT_STATUS = SteamUser.EPersonaState.Online;
+
+// 3. Rich Presence: Custom text that appears next to your name in the friend list
+// Note: This only works for certain games that support 'steam_display' strings.
+const RICH_PRESENCE_TEXT = "Idling for hours...";
 
 const accounts = [];
 
@@ -17,24 +24,19 @@ try {
         const lines = data.split(/\r?\n/);
 
         lines.forEach((line) => {
-            // Skip empty lines or comments
             if (!line.trim() || line.trim().startsWith('#')) return;
 
-            // Format: username:password
             const parts = line.split(':');
-            
             if (parts.length >= 2) {
                 const username = parts[0].trim();
-                // Handle passwords that might contain colons by joining the rest
                 const password = parts.slice(1).join(':').trim();
 
                 if (username && password) {
                     accounts.push({
                         username: username,
                         password: password,
-                        // We use the global GAMES_LIST for everyone
                         games: GAMES_LIST, 
-                        personaState: SteamUser.EPersonaState.Online
+                        personaState: ACCOUNT_STATUS
                     });
                 }
             }
@@ -86,7 +88,6 @@ function loginAccount(account) {
             password: account.password
         };
 
-        // 2 minute timeout in case login hangs
         const timeout = setTimeout(() => {
              console.log(`[${account.username}] Login timed out. Moving to next account.`);
              resolve(); 
@@ -97,9 +98,18 @@ function loginAccount(account) {
         client.on('loggedOn', () => {
             clearTimeout(timeout);
             console.log(`[${account.username}] Successfully logged on.`);
+            
+            // Set User Status
             client.setPersona(account.personaState);
+            
+            // Start Idling Games
             client.gamesPlayed(account.games);
-            console.log(`[${account.username}] Idling started.`);
+
+            // Set Rich Presence
+            // 'steam_display' is the standard key for custom status text
+            client.richPresence(account.games[0], { "steam_display": RICH_PRESENCE_TEXT });
+
+            console.log(`[${account.username}] Idling started with Rich Presence: "${RICH_PRESENCE_TEXT}"`);
             resolve();
         });
 
@@ -119,7 +129,6 @@ function loginAccount(account) {
                 console.log(`[${account.username}] Rate limit hit. Will retry in background in 30 mins.`);
                 setTimeout(() => client.logOn(logOnOptions), 30 * 60 * 1000);
             }
-            // Resolve to move to next account even if this one failed
             resolve();
         });
 

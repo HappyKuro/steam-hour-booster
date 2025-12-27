@@ -15,7 +15,11 @@ const ACCOUNT_STATUS = SteamUser.EPersonaState.Online;
 // Note: This only works for certain games that support 'steam_display' strings.
 const RICH_PRESENCE_TEXT = "Idling for hours...";
 
+// 4. How often to show the hour report in the console (in minutes)
+const REPORT_INTERVAL_MINUTES = 60;
+
 const accounts = [];
+const stats = {}; // Track start times for hour counting
 
 // Read accounts.txt
 try {
@@ -64,6 +68,27 @@ const rl = readline.createInterface({
 
 const clients = []; 
 
+// Function to print the current progress
+function printProgress() {
+    console.log(`\n--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---`);
+    let activeCount = 0;
+    
+    for (const username in stats) {
+        if (stats[username].startTime) {
+            const elapsedMs = Date.now() - stats[username].startTime;
+            const hours = (elapsedMs / (1000 * 60 * 60)).toFixed(2);
+            console.log(`[${username}] Boosted this session: ${hours} hours`);
+            activeCount++;
+        }
+    }
+    
+    if (activeCount === 0) console.log("No accounts currently active.");
+    console.log("-------------------------------------------\n");
+}
+
+// Set up periodic reporting
+setInterval(printProgress, REPORT_INTERVAL_MINUTES * 60 * 1000);
+
 async function startBoosters() {
     console.log(`[System] Starting Steam Hour Booster for ${accounts.length} accounts...`);
     console.log(`[System] Boosting AppIDs: ${GAMES_LIST.join(', ')}`);
@@ -73,7 +98,11 @@ async function startBoosters() {
     }
 
     console.log("\n[System] All accounts processed. The script is running in the background.");
+    console.log(`[System] A progress report will be shown every ${REPORT_INTERVAL_MINUTES} minutes.`);
     console.log("[System] Press Ctrl+C to stop.");
+    
+    // Initial report after everyone is logged in
+    printProgress();
 }
 
 function loginAccount(account) {
@@ -98,6 +127,9 @@ function loginAccount(account) {
         client.on('loggedOn', () => {
             clearTimeout(timeout);
             console.log(`[${account.username}] Successfully logged on.`);
+            
+            // Record start time for statistics
+            stats[account.username] = { startTime: Date.now() };
             
             // Set User Status
             client.setPersona(account.personaState);
@@ -133,6 +165,8 @@ function loginAccount(account) {
         });
 
         client.on('disconnected', (eresult, msg) => {
+            // When disconnected, we stop counting until reconnected
+            if (stats[account.username]) stats[account.username].startTime = null;
             console.log(`[${account.username}] Disconnected: ${msg}. Reconnecting...`);
         });
     });

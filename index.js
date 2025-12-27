@@ -2,7 +2,6 @@ const SteamUser = require('steam-user');
 const readline = require('readline');
 const fs = require('fs');
 const https = require('https');
-const crypto = require('crypto');
 
 // --- LOAD CONFIGURATION ---
 let config;
@@ -130,15 +129,11 @@ function loginAccount(account) {
     
     const client = new SteamUser();
     clients.push(client); 
-    
-    // Generate a unique machine ID based on the username to help Steam recognize the "device"
-    const machineID = crypto.createHash('sha1').update(account.username).digest('hex');
 
     const logOnOptions = {
         accountName: account.username,
         password: account.password,
-        machineName: "SteamHourBooster",
-        clientUniqueId: machineID
+        machineName: "SteamHourBooster"
     };
 
     client.logOn(logOnOptions);
@@ -176,7 +171,6 @@ function loginAccount(account) {
         });
     });
 
-    // Confirmation when the code works
     client.on('webLogOn', () => {
         log(`[${account.username}] Steam Guard code accepted.`);
     });
@@ -188,7 +182,6 @@ function loginAccount(account) {
             log(`[${account.username}] Rate limit hit. Retrying in 30m...`);
             setTimeout(() => client.logOn(logOnOptions), 30 * 60 * 1000);
         } else if (err.message.includes("InvalidPassword") || err.message.includes("LogonSessionReplaced")) {
-            // Keep the client alive to try again or stay disconnected
             if (stats[account.username]) stats[account.username].startTime = null;
         }
     });

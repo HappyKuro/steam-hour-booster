@@ -33,7 +33,6 @@ const stats = {}; // Track start times for hour counting
 
 /**
  * Sends a message to a Discord Webhook
- * @param {string} content - The message text
  */
 function sendDiscordNotification(content) {
     if (!DISCORD_WEBHOOK_URL) return;
@@ -43,33 +42,35 @@ function sendDiscordNotification(content) {
         username: "Steam Booster Bot"
     });
 
-    const url = new URL(DISCORD_WEBHOOK_URL);
-    const options = {
-        hostname: url.hostname,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': data.length,
-        },
-    };
+    try {
+        const url = new URL(DISCORD_WEBHOOK_URL);
+        const options = {
+            hostname: url.hostname,
+            path: url.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data),
+            },
+        };
 
-    const req = https.request(options);
-    req.on('error', (error) => {
-        console.error(`[Discord] Webhook Error: ${error.message}`);
-    });
-    req.write(data);
-    req.end();
+        const req = https.request(options);
+        req.on('error', (error) => {
+            console.error(`[Discord] Webhook Error: ${error.message}`);
+        });
+        req.write(data);
+        req.end();
+    } catch (e) {
+        console.error(`[Discord] Invalid Webhook URL`);
+    }
 }
 
 /**
  * Sends a message to a Telegram Bot
- * @param {string} content - The message text
  */
 function sendTelegramNotification(content) {
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
 
-    // Remove markdown symbols that might break Telegram's default parsing if not handled
     const cleanContent = content.replace(/\*\*/g, '').replace(/•/g, '-');
     
     const data = JSON.stringify({
@@ -83,7 +84,7 @@ function sendTelegramNotification(content) {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Content-Length': data.length,
+            'Content-Length': Buffer.byteLength(data),
         },
     };
 
@@ -97,7 +98,6 @@ function sendTelegramNotification(content) {
 
 /**
  * Helper to send to all configured platforms
- * @param {string} content 
  */
 function broadcastNotification(content) {
     sendDiscordNotification(content);
@@ -151,7 +151,6 @@ const rl = readline.createInterface({
 
 const clients = []; 
 
-// Function to print and send the current progress
 function printProgress() {
     let reportText = `\n--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---\n`;
     let notifyText = `**Hour Boost Report (${new Date().toLocaleTimeString()})**\n`;
@@ -161,7 +160,8 @@ function printProgress() {
         if (stats[username].startTime) {
             const elapsedMs = Date.now() - stats[username].startTime;
             const hours = (elapsedMs / (1000 * 60 * 60)).toFixed(2);
-            const line = `[${username}] Boosted this session: ${hours} hours`;
+            const displayName = stats[username].profileName || username;
+            const line = `[${displayName}] Boosted this session: ${hours} hours`;
             reportText += line + "\n";
             notifyText += "• " + line + "\n";
             activeCount++;
@@ -178,12 +178,14 @@ function printProgress() {
     broadcastNotification(notifyText);
 }
 
-// Set up periodic reporting
 setInterval(printProgress, REPORT_INTERVAL_MINUTES * 60 * 1000);
 
 async function startBoosters() {
-    console.log(`[System] Starting Steam Hour Booster for ${accounts.length} accounts...`);
-    broadcastNotification(`🚀 **System Started**: Boosting ${accounts.length} accounts.`);
+    const count = accounts.length;
+    const boostMsg = count === 1 ? "boosting 1 account" : `boosting ${count} accounts`;
+    
+    console.log(`[System] Starting Steam Hour Booster: ${boostMsg}...`);
+    broadcastNotification(`🚀 **System Started**: ${boostMsg}.`);
 
     for (const account of accounts) {
         await loginAccount(account);
@@ -216,25 +218,37 @@ function loginAccount(account) {
 
         client.logOn(logOnOptions);
 
+        // Fetch Steam Profile Name
+        client.on('accountInfo', (name) => {
+            if (stats[account.username]) {
+                stats[account.username].profileName = name;
+            }
+        });
+
         client.on('loggedOn', () => {
             clearTimeout(timeout);
             console.log(`[${account.username}] Successfully logged on.`);
-            broadcastNotification(`✅ **Logged In**: ${account.username} is now idling.`);
             
-            // Record start time for statistics
-            stats[account.username] = { startTime: Date.now() };
+            stats[account.username] = { 
+                startTime: Date.now(),
+                profileName: null // Will be filled by accountInfo event
+            };
 
-            // Set User Status
             client.setPersona(account.personaState);
-
-            // Start Idling Games
             client.gamesPlayed(account.games);
+            
+            if (account.games && account.games.length > 0) {
+                if (typeof client.setPresence === 'function') {
+                    client.setPresence(account.games[0], { "steam_display": RICH_PRESENCE_TEXT });
+                }
+            }
 
-            // Set Rich Presence
-            // 'steam_display' is the standard key for custom status text
-            client.richPresence(account.games[0], { "steam_display": RICH_PRESENCE_TEXT });
-
-            resolve();
+            // Wait a tiny bit for accountInfo to likely fire before resolving
+            setTimeout(() => {
+                const displayName = stats[account.username].profileName || account.username;
+                broadcastNotification(`✅ **Logged In**: ${displayName} is now idling.`);
+                resolve();
+            }, 2000);
         });
 
         client.on('steamGuard', (domain, callback) => {
@@ -258,9 +272,10 @@ function loginAccount(account) {
         });
 
         client.on('disconnected', (eresult, msg) => {
+            const displayName = (stats[account.username] && stats[account.username].profileName) || account.username;
             if (stats[account.username]) stats[account.username].startTime = null;
-            console.log(`[${account.username}] Disconnected: ${msg}. Reconnecting...`);
-            broadcastNotification(`📴 **Disconnected**: ${account.username} (${msg}).`);
+            console.log(`[${displayName}] Disconnected: ${msg}. Reconnecting...`);
+            broadcastNotification(`📴 **Disconnected**: ${displayName} (${msg}).`);
         });
     });
 }

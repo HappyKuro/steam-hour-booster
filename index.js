@@ -19,224 +19,170 @@ try {
 
 const accounts = [];
 const stats = {}; 
+const clients = [];
 
-// --- HELPER FUNCTIONS ---
+// --- LOGGING & NOTIFICATIONS ---
 
-function sendDiscordNotification(content) {
+function broadcastToDiscord(content) {
     if (!config.discord_webhook_url) return;
-
-    const data = JSON.stringify({
-        content: content,
-        username: "Steam Booster Bot"
-    });
-
+    const cleanContent = content.replace(/\x1b\[[0-9;]*m/g, "");
+    const data = JSON.stringify({ content: cleanContent, username: "Steam Booster Logs" });
     try {
         const url = new URL(config.discord_webhook_url);
         const options = {
             hostname: url.hostname,
             path: url.pathname,
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(data),
-            },
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
         };
-
         const req = https.request(options);
-        req.on('error', (error) => {}); // Silent fail
+        req.on('error', () => {}); 
         req.write(data);
         req.end();
     } catch (e) {}
 }
 
-function sendTelegramNotification(content) {
+function broadcastToTelegram(content) {
     if (!config.telegram_bot_token || !config.telegram_chat_id) return;
-
     const cleanContent = content.replace(/\*\*/g, '').replace(/•/g, '-');
-    const data = JSON.stringify({
-        chat_id: config.telegram_chat_id,
-        text: cleanContent
-    });
-
-    const options = {
-        hostname: 'api.telegram.org',
-        path: `/bot${config.telegram_bot_token}/sendMessage`,
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(data),
-        },
-    };
-
-    const req = https.request(options);
-    req.on('error', (error) => {});
-    req.write(data);
-    req.end();
+    const data = JSON.stringify({ chat_id: config.telegram_chat_id, text: cleanContent });
+    try {
+        const options = {
+            hostname: 'api.telegram.org',
+            path: `/bot${config.telegram_bot_token}/sendMessage`,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        };
+        const req = https.request(options);
+        req.write(data);
+        req.end();
+    } catch (e) {}
 }
 
-function broadcastNotification(content) {
-    sendDiscordNotification(content);
-    sendTelegramNotification(content);
+function log(message, isImportant = false) {
+    console.log(message);
+    broadcastToDiscord(message);
+    if (isImportant) broadcastToTelegram(message);
 }
 
-// Read accounts.txt
+// --- FILE LOADING ---
+
 try {
     if (fs.existsSync('accounts.txt')) {
         const data = fs.readFileSync('accounts.txt', 'utf8');
-        const lines = data.split(/\r?\n/);
-
-        lines.forEach((line) => {
+        data.split(/\r?\n/).forEach((line) => {
             if (!line.trim() || line.trim().startsWith('#')) return;
-            const parts = line.split(':');
-            if (parts.length >= 2) {
-                const username = parts[0].trim();
-                const password = parts.slice(1).join(':').trim();
-                if (username && password) {
-                    accounts.push({
-                        username: username,
-                        password: password,
-                        games: config.games_list, 
-                        personaState: config.account_status
-                    });
-                }
+            const [username, ...passParts] = line.split(':');
+            const password = passParts.join(':');
+            if (username && password) {
+                accounts.push({ username: username.trim(), password: password.trim() });
             }
         });
     } else {
-        console.error("[System] Error: accounts.txt not found!");
+        log("[System] Error: accounts.txt not found!", true);
         process.exit(1);
     }
 } catch (err) {
-    console.error(`[System] Error reading accounts.txt: ${err.message}`);
+    log(`[System] Error reading accounts: ${err.message}`, true);
     process.exit(1);
 }
-
-// --- LOGIC ---
 
 if (accounts.length === 0) {
-    console.error("[System] No valid accounts found in accounts.txt.");
+    log("[System] No valid accounts found.", true);
     process.exit(1);
 }
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-const clients = []; 
+// --- CORE LOGIC ---
 
 function printProgress() {
-    let reportText = `\n--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---\n`;
-    let notifyText = `**Hour Boost Report (${new Date().toLocaleTimeString()})**\n`;
+    let reportText = `--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---\n`;
     let activeCount = 0;
-    
     for (const username in stats) {
         if (stats[username].startTime) {
-            const elapsedMs = Date.now() - stats[username].startTime;
-            const hours = (elapsedMs / (1000 * 60 * 60)).toFixed(2);
-            const displayName = stats[username].profileName || username;
-            const line = `[${displayName}] Boosted this session: ${hours} hours`;
-            reportText += line + "\n";
-            notifyText += "• " + line + "\n";
+            const hours = ((Date.now() - stats[username].startTime) / (1000 * 60 * 60)).toFixed(2);
+            const name = stats[username].profileName || username;
+            reportText += `• [${name}] Boosted: ${hours} hours\n`;
             activeCount++;
         }
     }
-    
-    if (activeCount === 0) {
-        reportText += "No accounts currently active.\n";
-        notifyText += "No accounts currently active.\n";
-    }
-    
-    reportText += "-------------------------------------------\n";
-    console.log(reportText);
-    broadcastNotification(notifyText);
+    if (activeCount === 0) reportText += "No accounts active.\n";
+    log(reportText + "-------------------------------------------", true);
 }
 
 setInterval(printProgress, config.report_interval_minutes * 60 * 1000);
 
 async function startBoosters() {
     const count = accounts.length;
-    const boostMsg = count === 1 ? "boosting 1 account" : `boosting ${count} accounts`;
-    
-    console.log(`[System] Starting Steam Hour Booster: ${boostMsg}...`);
-    broadcastNotification(`🚀 **System Started**: ${boostMsg}.`);
+    log(`🚀 [System] Starting Booster: boosting ${count} account${count === 1 ? '' : 's'}...`, true);
 
-    // FIX: Launch accounts in parallel so one stuck login doesn't block the others
     for (const account of accounts) {
         loginAccount(account);
-        // Small delay to avoid aggressive Steam rate limits during initial handshake
-        await new Promise(r => setTimeout(r, 3000));
+        // Delay to avoid Steam Rate Limits
+        await new Promise(r => setTimeout(r, 5000));
     }
-
-    console.log("\n[System] Login background tasks initialized. Checking for Guard prompts...");
 }
 
 function loginAccount(account) {
-    console.log(`[${account.username}] Attempting login...`);
+    log(`[${account.username}] Initializing connection...`);
     
     const client = new SteamUser();
     clients.push(client); 
     
+    // Some versions of Steam-User require a machine name to trigger certain events
     const logOnOptions = {
         accountName: account.username,
-        password: account.password
+        password: account.password,
+        machineName: "SteamHourBooster"
     };
 
     client.logOn(logOnOptions);
 
     client.on('accountInfo', (name) => {
-        if (stats[account.username]) {
-            stats[account.username].profileName = name;
-        }
+        if (stats[account.username]) stats[account.username].profileName = name;
     });
 
     client.on('loggedOn', () => {
-        console.log(`[${account.username}] Successfully logged on.`);
+        log(`✅ [${account.username}] Logged in successfully.`);
+        stats[account.username] = { startTime: Date.now(), profileName: null };
         
-        stats[account.username] = { 
-            startTime: Date.now(),
-            profileName: null 
-        };
-
-        client.setPersona(account.personaState);
-        client.gamesPlayed(account.games);
+        client.setPersona(config.account_status);
+        client.gamesPlayed(config.games_list);
         
-        if (config.rich_presence_enabled && account.games && account.games.length > 0) {
+        if (config.rich_presence_enabled && config.games_list.length > 0) {
             if (typeof client.setPresence === 'function') {
-                client.setPresence(account.games[0], { "steam_display": config.rich_presence_message });
+                client.setPresence(config.games_list[0], { "steam_display": config.rich_presence_message });
             }
         }
 
         setTimeout(() => {
             const displayName = stats[account.username].profileName || account.username;
-            broadcastNotification(`✅ **Logged In**: ${displayName} is now idling.`);
-        }, 2000);
+            log(`🎮 [${displayName}] is now boosting hours.`, true);
+        }, 3000);
     });
 
-    // Steam Guard Listener
     client.on('steamGuard', (domain, callback) => {
-        const msg = `🔑 [${account.username}] Steam Guard Code required! Email domain: ${domain || 'Mobile/Unknown'}`;
-        console.log(msg);
-        broadcastNotification(msg);
+        const guardMsg = `🔑 [${account.username}] STEAM GUARD REQUIRED! (Domain: ${domain || 'Mobile App'})`;
+        log(guardMsg, true);
         
-        rl.question(`Enter Code for ${account.username}: `, (code) => {
+        // Pause automated logs for a moment so the prompt is visible
+        rl.question(`👉 Enter code for ${account.username}: `, (code) => {
             callback(code.trim());
         });
     });
 
     client.on('error', (err) => {
-        console.error(`[${account.username}] Error: ${err.message}`);
-        broadcastNotification(`❌ **Error** [${account.username}]: ${err.message}`);
-        
+        log(`❌ [${account.username}] Error: ${err.message}`, true);
         if (err.message.includes("RateLimitExceeded")) {
-            console.log(`[${account.username}] Rate limit hit. Retrying in 30 minutes...`);
+            log(`[${account.username}] Rate limit hit. Retrying in 30m...`);
             setTimeout(() => client.logOn(logOnOptions), 30 * 60 * 1000);
         }
     });
 
     client.on('disconnected', (eresult, msg) => {
-        const displayName = (stats[account.username] && stats[account.username].profileName) || account.username;
         if (stats[account.username]) stats[account.username].startTime = null;
-        console.log(`[${displayName}] Disconnected: ${msg}.`);
+        log(`📴 [${account.username}] Disconnected: ${msg}`);
     });
 }
 

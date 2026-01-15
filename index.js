@@ -103,9 +103,8 @@ async function pollDiscordInput() {
                     if (msg.content.startsWith('!code ')) {
                         const parts = msg.content.split(' ');
                         const targetUser = parts[1];
-                        const code = parts[2];
-
                         // Find the specific bot instance waiting for a code
+                        const code = parts[2];
                         if (targetUser && code && activeBots.has(targetUser)) {
                             const bot = activeBots.get(targetUser);
                             bot.submitSteamGuardCode(code, "Remote Discord");
@@ -124,13 +123,42 @@ class SteamBot {
     constructor(username, password) {
         this.username = username;
         this.password = password;
-        this.client = new SteamUser();
+        this.client = null; // Will be created freshly on every login
         this.startTime = null;
         this.profileName = null;
         this.guardCallback = null; // Function to call when we get a code
         this.reconnectTimer = null;
+        this.watchdogTimer = null; // Safety timer for stuck logins
+    }
 
+    login() {
+        // CLEANUP: Destroy old client to ensure fresh socket connection
+        if (this.client) {
+            this.client.removeAllListeners();
+            try { this.client.logOff(); } catch (e) {}
+            this.client = null;
+        }
+
+        // CREATE NEW INSTANCE
+        this.client = new SteamUser();
         this.initializeEvents();
+
+        Notifier.broadcast(`[${this.username}] Initializing connection...`);
+        
+        const logOnOptions = {
+            accountName: this.username,
+            password: this.password,
+            machineName: "SteamHourBooster"
+        };
+        
+        this.client.logOn(logOnOptions);
+
+        // WATCHDOG: If not logged on within 60 seconds, force restart
+        if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+        this.watchdogTimer = setTimeout(() => {
+            Notifier.broadcast(`⚠️ [${this.username}] Login stuck. Force restarting...`, true);
+            this.login();
+        }, 60000);
     }
 
     initializeEvents() {
@@ -142,27 +170,14 @@ class SteamBot {
         this.client.on('disconnected', (eresult, msg) => this.onDisconnected(msg));
     }
 
-    login() {
-        Notifier.broadcast(`[${this.username}] Initializing connection...`);
-        const logOnOptions = {
-            accountName: this.username,
-            password: this.password,
-            machineName: "SteamHourBooster"
-        };
-        this.client.logOn(logOnOptions);
-    }
-
     onLoggedOn() {
+        clearTimeout(this.watchdogTimer); // Success! Stop the watchdog
         Notifier.broadcast(`✅ [${this.username}] Logged in successfully.`);
         this.startTime = Date.now();
         
-        // 1. Set Status
         this.client.setPersona(config.account_status);
-        
-        // 2. Play Games
         this.client.gamesPlayed(config.games_list);
 
-        // 3. Set Rich Presence (if enabled)
         if (config.rich_presence_enabled && config.games_list.length > 0) {
             if (typeof this.client.setPresence === 'function') {
                 this.client.setPresence(config.games_list[0], { "steam_display": config.rich_presence_message });
@@ -176,14 +191,14 @@ class SteamBot {
     }
 
     onSteamGuard(domain, callback) {
+        clearTimeout(this.watchdogTimer); // Don't restart while user is typing code
+        
         const msg = `🔑 [${this.username}] STEAM GUARD REQUIRED! (Domain: ${domain || 'Mobile/Email'})\n` +
                     `   Reply via Terminal or Discord: \`!code ${this.username} YOUR_CODE\``;
         Notifier.broadcast(msg, true);
         
-        // Save the callback so we can use it later (via terminal OR discord)
         this.guardCallback = callback;
 
-        // Prompt in terminal
         rl.question(`👉 Enter code for ${this.username}: `, (code) => {
             this.submitSteamGuardCode(code.trim(), "Terminal");
         });
@@ -193,11 +208,12 @@ class SteamBot {
         if (this.guardCallback) {
             Notifier.broadcast(`[${this.username}] Submitting code from ${source}...`);
             this.guardCallback(code);
-            this.guardCallback = null; // Clear it so we don't submit twice
+            this.guardCallback = null;
         }
     }
 
     onError(err) {
+        clearTimeout(this.watchdogTimer);
         Notifier.broadcast(`❌ [${this.username}] Error: ${err.message}`, true);
         
         if (err.message.includes("RateLimitExceeded")) {
@@ -207,18 +223,17 @@ class SteamBot {
             Notifier.broadcast(`[${this.username}] Connection issue. Retrying in 30s...`, true);
             this.scheduleReconnect(30000);
         } else {
-            // Stop stats for fatal errors
             this.startTime = null;
         }
     }
 
     onDisconnected(msg) {
+        clearTimeout(this.watchdogTimer);
         this.startTime = null;
         Notifier.broadcast(`📴 [${this.username}] Disconnected: ${msg}`);
 
         if (msg.includes("LoggedInElsewhere")) {
             Notifier.broadcast(`⚠️ [${this.username}] Account logged in elsewhere. Reconnecting in 5 minutes...`, true);
-            // Wait 5 minutes to avoid fighting with the user who just logged in
             this.scheduleReconnect(5 * 60 * 1000);
         } else if (msg.includes("NoConnection") || msg.includes("timed out") || msg.includes("ServiceUnavailable")) {
             Notifier.broadcast(`[${this.username}] Network error. Auto-reconnecting in 30s...`, true);
@@ -241,7 +256,7 @@ class SteamBot {
     }
 }
 
-// --- INITIALIZATION FLOW ---
+// --- INITIALIZATION ---
 
 function loadAccounts() {
     const loaded = [];
@@ -264,12 +279,10 @@ function loadAccounts() {
     return loaded;
 }
 
-// --- GLOBAL REPORT LOOP ---
 function startReportingLoop() {
     setInterval(() => {
         let report = `--- Hour Boost Report (${new Date().toLocaleTimeString()}) ---\n`;
         let count = 0;
-
         activeBots.forEach(bot => {
             const line = bot.getReport();
             if (line) {
@@ -277,14 +290,12 @@ function startReportingLoop() {
                 count++;
             }
         });
-
         if (count === 0) report += "No accounts currently active.\n";
         report += "-------------------------------------------";
         Notifier.broadcast(report, true);
     }, config.report_interval_minutes * 60 * 1000);
 }
 
-// --- STARTUP ---
 (async () => {
     const accountList = loadAccounts();
     if (accountList.length === 0) {
@@ -294,18 +305,14 @@ function startReportingLoop() {
 
     Notifier.broadcast(`🚀 [System] Starting Booster for ${accountList.length} accounts...`, true);
 
-    // Start Discord polling if configured
     if (config.discord_bot_token && config.discord_channel_id) {
         setInterval(pollDiscordInput, 5000);
     }
 
-    // Launch bots sequentially with a delay
     for (const acc of accountList) {
         const bot = new SteamBot(acc.username, acc.password);
-        activeBots.set(acc.username, bot); // Register instance
+        activeBots.set(acc.username, bot);
         bot.login();
-        
-        // Wait 7 seconds before starting next one to prevent rate limits
         await new Promise(r => setTimeout(r, 7000));
     }
 

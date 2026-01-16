@@ -129,6 +129,7 @@ class SteamBot {
         this.guardCallback = null; // Function to call when we get a code
         this.reconnectTimer = null;
         this.watchdogTimer = null; // Safety timer for stuck logins
+        this.retryCount = 0; // Track consecutive failures
     }
 
     login() {
@@ -171,7 +172,8 @@ class SteamBot {
     }
 
     onLoggedOn() {
-        clearTimeout(this.watchdogTimer); // Success! Stop the watchdog
+        clearTimeout(this.watchdogTimer);
+        this.retryCount = 0; // Reset retries on success
         Notifier.broadcast(`✅ [${this.username}] Logged in successfully.`);
         this.startTime = Date.now();
         
@@ -214,6 +216,20 @@ class SteamBot {
 
     onError(err) {
         clearTimeout(this.watchdogTimer);
+        
+        if (err.message.includes("InvalidPassword")) {
+            if (this.retryCount < 2) {
+                this.retryCount++;
+                Notifier.broadcast(`⚠️ [${this.username}] Invalid Password detected. Retrying (${this.retryCount}/2) in 10s...`, true);
+                Notifier.broadcast(`ℹ️ [${this.username}] TIP: Ensure you are using your LOGIN username, NOT your Display Name.`);
+                this.scheduleReconnect(10000);
+            } else {
+                Notifier.broadcast(`⛔ [${this.username}] Critical: Password rejected 3 times. Stopping to prevent ban. Verify details in accounts.txt.`, true);
+                this.startTime = null;
+            }
+            return;
+        }
+
         Notifier.broadcast(`❌ [${this.username}] Error: ${err.message}`, true);
         
         if (err.message.includes("RateLimitExceeded")) {

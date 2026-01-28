@@ -80,7 +80,6 @@ class Notifier {
 }
 
 // --- DISCORD REMOTE INPUT POLLER ---
-// Checks for !code commands in the configured Discord channel
 async function pollDiscordInput() {
     if (!config.discord_bot_token || !config.discord_channel_id) return;
 
@@ -99,11 +98,9 @@ async function pollDiscordInput() {
                 const messages = JSON.parse(data);
                 if (messages.length > 0) {
                     const msg = messages[0];
-                    // Syntax: !code <username> <code>
                     if (msg.content.startsWith('!code ')) {
                         const parts = msg.content.split(' ');
                         const targetUser = parts[1];
-                        // Find the specific bot instance waiting for a code
                         const code = parts[2];
                         if (targetUser && code && activeBots.has(targetUser)) {
                             const bot = activeBots.get(targetUser);
@@ -123,24 +120,22 @@ class SteamBot {
     constructor(username, password) {
         this.username = username;
         this.password = password;
-        this.client = null; // Will be created freshly on every login
+        this.client = null; 
         this.startTime = null;
         this.profileName = null;
-        this.guardCallback = null; // Function to call when we get a code
+        this.guardCallback = null;
         this.reconnectTimer = null;
-        this.watchdogTimer = null; // Safety timer for stuck logins
+        this.watchdogTimer = null;
         this.retryCount = 0; // Track consecutive failures
     }
 
     login() {
-        // CLEANUP: Destroy old client to ensure fresh socket connection
         if (this.client) {
             this.client.removeAllListeners();
             try { this.client.logOff(); } catch (e) {}
             this.client = null;
         }
 
-        // CREATE NEW INSTANCE
         this.client = new SteamUser();
         this.initializeEvents();
 
@@ -154,7 +149,6 @@ class SteamBot {
         
         this.client.logOn(logOnOptions);
 
-        // WATCHDOG: If not logged on within 60 seconds, force restart
         if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
         this.watchdogTimer = setTimeout(() => {
             Notifier.broadcast(`⚠️ [${this.username}] Login stuck. Force restarting...`, true);
@@ -193,7 +187,7 @@ class SteamBot {
     }
 
     onSteamGuard(domain, callback) {
-        clearTimeout(this.watchdogTimer); // Don't restart while user is typing code
+        clearTimeout(this.watchdogTimer);
         
         const msg = `🔑 [${this.username}] STEAM GUARD REQUIRED! (Domain: ${domain || 'Mobile/Email'})\n` +
                     `   Reply via Terminal or Discord: \`!code ${this.username} YOUR_CODE\``;
@@ -230,6 +224,13 @@ class SteamBot {
             return;
         }
 
+        // Handle Session Replacement (Logged in elsewhere)
+        if (err.message.includes("LogonSessionReplaced")) {
+            Notifier.broadcast(`⚠️ [${this.username}] Session replaced (Logged in elsewhere). Reconnecting in 5 minutes...`, true);
+            this.scheduleReconnect(5 * 60 * 1000);
+            return;
+        }
+
         Notifier.broadcast(`❌ [${this.username}] Error: ${err.message}`, true);
         
         if (err.message.includes("RateLimitExceeded")) {
@@ -248,7 +249,7 @@ class SteamBot {
         this.startTime = null;
         Notifier.broadcast(`📴 [${this.username}] Disconnected: ${msg}`);
 
-        if (msg.includes("LoggedInElsewhere")) {
+        if (msg.includes("LoggedInElsewhere") || msg.includes("LogonSessionReplaced")) {
             Notifier.broadcast(`⚠️ [${this.username}] Account logged in elsewhere. Reconnecting in 5 minutes...`, true);
             this.scheduleReconnect(5 * 60 * 1000);
         } else if (msg.includes("NoConnection") || msg.includes("timed out") || msg.includes("ServiceUnavailable")) {

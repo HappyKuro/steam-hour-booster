@@ -55,7 +55,7 @@ Lines starting with `#` are ignored.
 - `startup_delay_seconds`: delay between account startups
 - `login_timeout_seconds`: login watchdog timeout
 - `remote_command_poll_interval_seconds`: Discord polling interval
-- `machine_name`: custom machine name sent on login, or `random` to generate a Windows-style `DESKTOP-XXXXXXX` value on startup
+- `machine_name`: custom machine name sent on login, or `random` to generate a fresh Windows-style `DESKTOP-XXXXXXX` value on every login attempt
 - `discord_bot_token`: optional Discord bot token for log relaying and `!code` polling
 - `discord_channel_id`: optional Discord channel ID
 - `telegram_bot_token`: optional Telegram bot token for important relays

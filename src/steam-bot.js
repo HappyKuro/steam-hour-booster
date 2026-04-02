@@ -2,6 +2,7 @@
 
 const SteamUser = require('steam-user');
 
+const { buildMachineName } = require('./config');
 const { buildSteamErrorLabel, safeString } = require('./utils');
 
 const MAX_INVALID_PASSWORD_RETRIES = 2;
@@ -49,13 +50,14 @@ class SteamBot {
         this.client = new SteamUser({ autoRelogin: false });
         this.bindClientEvents();
 
-        this.notifier.info(this.logScope, `Connecting to Steam with machine name ${this.config.machine_name}...`);
+        const machineName = buildMachineName(this.config.machine_name);
+        this.notifier.info(this.logScope, `Connecting to Steam with machine name ${machineName}...`);
 
         try {
             this.client.logOn({
                 accountName: this.account.username,
                 password: this.account.password,
-                machineName: this.config.machine_name
+                machineName
             });
         } catch (error) {
             this.notifier.error(this.logScope, `Failed to start login: ${error.message}`, { important: true });

@@ -75,10 +75,20 @@ function resolveMachineName(value) {
     const normalized = safeString(value, DEFAULT_CONFIG.machine_name);
 
     if (!normalized) {
-        return generateWindowsMachineName();
+        return DEFAULT_CONFIG.machine_name;
     }
 
     if (RANDOM_MACHINE_NAME_TOKENS.has(normalized.toLowerCase())) {
+        return 'random';
+    }
+
+    return normalized;
+}
+
+function buildMachineName(value) {
+    const normalized = safeString(value, DEFAULT_CONFIG.machine_name);
+
+    if (!normalized || RANDOM_MACHINE_NAME_TOKENS.has(normalized.toLowerCase())) {
         return generateWindowsMachineName();
     }
 
@@ -189,6 +199,7 @@ module.exports = {
     CONFIG_PATH,
     DEFAULT_CONFIG,
     ROOT_DIR,
+    buildMachineName,
     loadAccounts,
     loadConfig
 };

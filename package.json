@@ -1,12 +1,17 @@
 {
     "name": "steam-hour-booster",
     "version": "1.0.0",
-    "description": "A Node.js script to boost Steam hours across multiple accounts.",
+    "description": "A multi-account Steam hour booster with validation, reporting, and remote Steam Guard helpers.",
     "main": "index.js",
+    "engines": {
+        "node": ">=18"
+    },
     "dependencies": {
         "steam-user": "^5.3.0"
     },
     "scripts": {
-        "start": "node index.js"
+        "start": "node index.js start",
+        "validate": "node index.js validate",
+        "help": "node index.js help"
     }
 }

@@ -1,0 +1,4 @@
+# One account per line
+# Format: username:password
+
+my_steam_login:my_password

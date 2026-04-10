@@ -1,7 +1,7 @@
 'use strict';
 
 const { createRequest } = require('./http');
-const { compareSnowflakes, safeString, truncate } = require('./utils');
+const { compareSnowflakes, delay, safeString, truncate } = require('./utils');
 
 class DiscordCommandPoller {
     constructor(config, notifier, commandCenter, handlers = {}) {
@@ -14,6 +14,7 @@ class DiscordCommandPoller {
         this.isPolling = false;
         this.lastErrorKey = null;
         this.failureCount = 0;
+        this.transientFailureCount = 0;
     }
 
     get enabled() {
@@ -63,7 +64,7 @@ class DiscordCommandPoller {
         this.isPolling = true;
 
         try {
-            const messages = await this.fetchMessages(10);
+            const messages = await this.fetchMessagesWithRetry(10);
             const unseenMessages = messages
                 .filter((message) => !this.lastSeenMessageId || compareSnowflakes(message.id, this.lastSeenMessageId) > 0)
                 .sort((left, right) => compareSnowflakes(left.id, right.id));
@@ -75,10 +76,24 @@ class DiscordCommandPoller {
 
             this.lastErrorKey = null;
             this.failureCount = 0;
+            this.transientFailureCount = 0;
         } catch (error) {
             this.recordPollError(error);
         } finally {
             this.isPolling = false;
+        }
+    }
+
+    async fetchMessagesWithRetry(limit) {
+        try {
+            return await this.fetchMessages(limit);
+        } catch (error) {
+            if (!this.isTransientDiscordError(error)) {
+                throw error;
+            }
+
+            await delay(2000);
+            return this.fetchMessages(limit);
         }
     }
 
@@ -107,6 +122,18 @@ class DiscordCommandPoller {
         }
 
         return parsed;
+    }
+
+    isTransientDiscordError(error) {
+        const message = String(error?.message || error);
+
+        return /Discord returned (429|502|503|504)/i.test(message)
+            || /upstream connect error/i.test(message)
+            || /connection termination/i.test(message)
+            || /ECONNRESET/i.test(message)
+            || /ETIMEDOUT/i.test(message)
+            || /socket hang up/i.test(message)
+            || /Request timed out/i.test(message);
     }
 
     async handleMessage(message) {
@@ -184,9 +211,20 @@ class DiscordCommandPoller {
 
     recordPollError(error) {
         const key = error instanceof Error ? error.message : String(error);
+        const transient = this.isTransientDiscordError(error);
+
         this.failureCount += 1;
 
-        if (this.lastErrorKey !== key || this.failureCount === 1 || this.failureCount % 12 === 0) {
+        if (transient) {
+            this.transientFailureCount += 1;
+
+            if (this.lastErrorKey !== key || this.transientFailureCount === 1 || this.transientFailureCount % 10 === 0) {
+                this.notifier.warn(
+                    'Discord',
+                    `Discord command polling hit a temporary upstream issue and will keep retrying: ${key}`
+                );
+            }
+        } else if (this.lastErrorKey !== key || this.failureCount === 1 || this.failureCount % 12 === 0) {
             this.notifier.warn('Discord', `Remote code polling failed: ${key}`);
         }
 
